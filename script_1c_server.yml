@@ -1,0 +1,164 @@
+---
+- name: Installing 1C server
+  hosts: all
+  become: yes
+  vars:
+   src_path: /1c
+   dst_path: /1c
+   srvname: srv1c-8-3-19-1522
+   syscfg: /etc/sysconfig
+   initd: /etc/init.d
+   range: 1560:1691 #ports 1c fjr 1cv83 cfg file
+   frange: 1560-1691 #ports 1c for firewalld
+  tasks:
+   - name: make dir 1c
+     file:
+      path: /1c/
+      state: directory
+      mode: '0777'
+
+   - block:
+
+	- name: Set RU Locale
+          command: localectl set-locale LANG=ru_RU.utf8
+
+        - name: Copy rpm packeges from ansible server
+          copy:
+           src: '{{ item }}'
+           dest: '{{ dst_path }}'
+          with_fileglob:
+           - '{{ src_path }}/*.rpm'
+ '
+        - name: installing 1C server
+          yum:
+           name:
+            - '{{ item }}'
+          with_fileglob:
+            - '{{ dst_path }}/*.rpm'
+
+        - name: "Check srv1cv83 exists in sysconfig"
+          stat:
+            path: "/etc/sysconfig/{{ srvname }}"
+          register: srv1cv83conf
+
+        - name: copy srv1cv83 conf file
+          command: 'cp /opt/1cv8/x86_64/8.3.19.1522/srv1cv83.conf {{ syscfg }}/{{ srvname }}'
+          when: srv1cv83conf.stat.isreg is undefined
+
+       	- name: "Check srv1cv83 exists in init.d"
+          stat:
+            path: "{{ initd }}/{{ srvname }}"
+          register: srv1cv83
+
+
+        - name: copy srv1cv83 file
+          command: 'cp /opt/1cv8/x86_64/8.3.19.1522/srv1cv83 {{ initd }}/{{ srvname }}'
+          when: srv1cv83.stat.isreg is undefined
+
+        - name: checking service exist
+          service_facts:
+        - debug:
+           msg: srv1cv83 doesnt exists
+          when: "'{{ srvname }}' not in services"
+
+        - name: add service srv1cv83
+          command: 'chkconfig --add {{ srvname }}'
+
+        - name: start service srv1cv83
+          service:
+           name: '{{ srvname }}'
+           state: started
+           enabled: yes
+
+        - name: installing external libraries
+          yum:
+           name:
+            - fontconfig
+            - freetype
+            - libgsf
+            - unixODBC
+            - glibc.i686
+           state: latest
+
+        - name: make dir fonts
+          file:
+       	   path: /home/fonts
+           state: directory
+           mode: '0755'
+
+        - name: downloading fonts
+          copy:
+           src: /1c/fonts/{{ item }}
+           dest: /usr/share/fonts/truetype/
+          with_fileglob:
+           - /1c/fonts/*
+
+        - name: refresh fonts
+          command: fc-cache –fv
+
+        - name : allow 1c posts in firewalld
+          firewalld:
+           port: "{{ item }}"
+           permanent: yes
+           immediate: yes
+           state: enabled
+          with_items:
+           - 1540/tcp
+           - 1541/tcp
+           - '{{ frange }}/tcp'
+           - 5432/tcp
+
+        - name: make dir hasp
+          file:
+       	   path: '{{ dst_path }}/hasp'
+           state: directory
+           mode: '0755'
+        
+        - name: Copy hasp rpm packeges from ansible server
+          copy:
+           src: '{{ item }}'
+           dest: '{{ dst_path }}/hasp'
+          with_fileglob:
+           - '{{ src_path }}/hasp/*.rpm'
+
+        - name: installing hasp drivers
+          yum:
+           name:
+            - /1c/hasp/*.rpm
+
+        - name: start service haspd
+          service:
+           name: haspd
+           state: started
+           enabled: yes
+
+
+     when: ansible_distribution == "CentOS"
+
+   - name: make dir for logs
+     file:
+        path: /var/log/1c/logs/
+        state: directory
+        mode: '0755'
+
+   - name: make dir for config logs
+     file:
+       	path: /opt/1C/v8.3/x86_64/conf/
+        state: directory
+        mode: '0755'
+
+#   - name: add a debug parameter in working conf file 1cv83 
+#     lineinfile:
+#          path: '{{ syscfg }}/{{ srvname }}'
+#          insertafter: '#SRV1CV8_DEBUG'
+#          line: 'SRV1CV8_DEBUG=1'
+#          state: present
+
+#   - name: add a new port range in working conf file 1cv83 
+#     lineinfile:
+#          path: '{{ syscfg }}/{{ srvname }}'
+#          insertafter: '#SRV1CV8_RANGE'
+#          line: 'SRV1CV8_RANGE={{ range }}'
+#          state: present
+
+
