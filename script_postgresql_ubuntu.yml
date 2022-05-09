@@ -1,0 +1,179 @@
+---
+- name: Installing postgresql server
+  hosts: all
+  become: yes
+  vars:
+   src_path: /postgres
+   dst_path: /postgres
+   psqlconf: /var/lib/pgsql/14/data/
+   sharbuff: "{{ (ansible_memtotal_mb/4) | round | int }}"
+   wrkmem: "{{ (ansible_memtotal_mb/32) | round | int }}"
+   mainwrkmem: "{{ (ansible_memtotal_mb/16) | round | int }}"
+   pg: postgresql-14
+  tasks:
+   - name: make dir postgres
+     file:
+      path: /postgres/
+      state: directory
+      mode: '0777'
+   - name: make dir addon
+     file:
+      path: /postgres/addon
+      state: directory
+      mode: '0777'
+
+   - name: make dir for pgstatstmp
+     file:
+      path: /var/lib/pgsql_stats_tmp
+      state: directory
+      mode: '0777'
+
+   - name: change fstab for tmp table
+     lineinfile:
+         path: /etc/fstab
+         regexp: 'tmpfs /var/lib/pgsql_stats_tmp tmpfs size=1G,uid=postgres,gid=postgres 0 0'
+         line: 'tmpfs /var/lib/pgsql_stats_tmp tmpfs size=1G,uid=postgres,gid=postgres 0 0'
+
+   - name: change fstab for pg DATA
+     lineinfile:
+         path: /etc/fstab
+         regexp: '/dev/sda4 {{ pgsqlconf }} tmpfs auto,uid=pgdata,gid=pgdata 0 0'
+         line: '/dev/sda4 {{ pgsqlconf }} tmpfs auto,uid=pgdata,gid=pgdata 0 0'
+
+   - name: change fstab for tmp table
+     lineinfile:
+         path: /etc/fstab
+         regexp: '//192.168.1.10/POSTGRES /mnt/share/ cifs auto,user,iocharset=utf8,uid=111,username=forsaga,password=39533953 0 0'
+         line: '//192.168.1.10/POSTGRES /mnt/share/ cifs auto,user,iocharset=utf8,uid=111,username=forsaga,password=39533953 0 0'
+   
+   - name: mount share
+     command: mount /mnt/share/ 
+
+   - block:
+
+        - name: installing some apps
+          apt:
+           name:
+            - cifs-utils
+            - mc
+           state: latest
+
+        - name: mount share
+          mount:
+           src: //192.168.1.10/POSTGRES
+           path: /mnt/share/
+           fstype: cifs
+           opts: 'username=forsaga,password=39533953'
+           state: mounted
+
+        - name: mount pgtmp
+          mount:
+           path: /var/lib/pgsql_stats_tmp
+           fstype: tmpfs
+           state: mounted
+
+        - name: Copy deb packages from ansible server
+          copy:
+           src: '{{ item }}'
+           dest: '{{ dst_path }}'
+          with_fileglob:
+           - '{{ src_path }}/*.deb'
+
+        - name: installing postgresql server
+          yum:
+           name:
+            - '{{ dst_path }}/postgresql14-1c-libs-14.2-3.el7.x86_64.rpm'
+            - '{{ dst_path }}/postgresql14-1c-14.2-3.el7.x86_64.rpm'
+            - '{{ dst_path }}/postgresql14-1c-contrib-14.2-3.el7.x86_64.rpm'
+            - '{{ dst_path }}/postgresql14-1c-server-14.2-3.el7.x86_64.rpm'
+
+        - name: Copy addon rpm packages from ansible server
+          copy:
+           src: '{{ item }}'
+           dest: '{{ dst_path }}/addon/'
+          with_fileglob:
+           - '{{ src_path }}/addon/*.rpm'
+
+        - name: installing postgresql addon
+          yum:
+           name:
+            - '{{ item }}'
+          with_fileglob:
+            - '{{ dst_path }}/addon/*.rpm'
+
+        - name : allow postgresql posts in firewalld
+          firewalld:
+           port: "{{ item }}"
+           permanent: yes
+           immediate: yes
+           state: enabled
+          with_items:
+           - 5432/tcp
+
+        - name: "Check initializing pg database"
+          stat:
+            path: /var/lib/pgsql/14/data/
+          register: pgdata
+
+        - name: initialize pg database
+          command: /usr/pgsql-14/bin/postgresql-14-setup initdb
+          when: pgdata.stat.isreg is undefined
+
+        - name: start and enable pgsql service
+          service:
+           name: '{{ pg }}'
+           state: started
+           enabled: yes
+
+
+     when: ansible_distribution == "Ubuntu"
+
+   - name: pd reset database user
+     become_user: postgres
+     postgresql_user:
+      name: "postgres"
+      password: "postgres"
+
+   - name: change postgres network 
+     lineinfile:
+         path: '{{ psqlconf }}/postgresql.conf'
+         regexp: '^listen_addresses'
+         line: "listen_addresses = '*'"
+
+   - name: change postgres pg hba access
+     lineinfile:
+         path: '{{ psqlconf }}/pg_hba.conf'
+         regexp: 'host   all   all  0.0.0.0/0  md5'
+         line: 'host   all   all  0.0.0.0/0  md5'
+
+   - name: set temp buffer for psql.conf
+     lineinfile:
+         path: '{{ psqlconf }}/postgresql.conf'
+         regexp: '^temp_buffers'
+         insertafter: '#temp_buffers'
+         line: 'temp_buffers = 256MB'
+         state: present
+
+   - name: set shared buffer for psql.conf
+     lineinfile:
+         path: '{{ psqlconf }}/postgresql.conf'
+         regexp: '^shared_buffers'
+         insertafter: 'shared_buffers'
+         line: "shared_buffers = {{ sharbuff }}MB"
+         state: present
+
+   - name: set work mem for psql.conf
+     lineinfile:
+         path: '{{ psqlconf }}/postgresql.conf'
+         regexp: '^work_mem'
+         insertafter: 'work_mem'
+         line: "work_mem = {{ wrkmem }}MB"
+         state: present
+
+   - name: set maintanance_work_mem for psql.conf
+     lineinfile:
+         path: '{{ psqlconf }}/postgresql.conf'
+         regexp: '^maintenance_work_mem'
+         insertafter: 'maintenance_work_mem'
+         line: "maintenance_work_mem = {{ mainwrkmem }}MB"
+         state: present
