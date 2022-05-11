@@ -37,8 +37,8 @@
    - name: change fstab for pg DATA
      lineinfile:
          path: /etc/fstab
-         regexp: '/dev/sda4 {{ pgsqlconf }} tmpfs auto,uid=pgdata,gid=pgdata 0 0'
-         line: '/dev/sda4 {{ pgsqlconf }} tmpfs auto,uid=pgdata,gid=pgdata 0 0'
+         regexp: '/dev/sda4 {{ psqlconf }} tmpfs auto,uid=pgdata,gid=pgdata 0 0'
+         line: '/dev/sda4 {{ psqlconf }} tmpfs auto,uid=pgdata,gid=pgdata 0 0'
 
    - name: change fstab for tmp table
      lineinfile:
